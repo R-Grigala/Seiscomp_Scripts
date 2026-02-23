@@ -9,9 +9,8 @@ import logging
 from logging.handlers import RotatingFileHandler
 
 # იწერება კონფიგურაცია, რომლითაც მონაცემს წამოიღებს მიწისძვრის შესახებ
-SERVER_IP = 'localhost'
+SERVER_IP = '192.168.11.250'
 SCRIPT_PATH = os.path.dirname(os.path.abspath(__file__))
-EVENT_ID = sys.argv[2]
 
 # გაშვებული სკრიპტის მისამართი
 TEMP_DIR_PATH = SCRIPT_PATH + "/temp"
@@ -43,10 +42,15 @@ logger.setLevel(logging.DEBUG)
 logger.addHandler(rotating_handler)
 
 
+# safe helper: script is sometimes called without the event_id argument
+def get_event_id_from_argv():
+    return sys.argv[2] if len(sys.argv) > 2 else None
+
+
 # ეს ფუნქცია პასუხისმგებელია xml-ის დაგენერირებაზე სეისკომპიდან გადმოცემული event_id-ით
 def xml_dump(xml_path, event_id, server_ip):
-    # seiscomp exec scxmldump -APMfmp -o /home/sysop/Code/Seiscomp_Scripts/generate_shakemap/temp/eq_log.xml -E grg2025fary -d localhost
-    command = f'seiscomp exec scxmldump -APMfmp -o {xml_path} -E {event_id} -d {server_ip}'
+    # seiscomp exec scxmldump -AMp -o /home/sysop/Code/Seiscomp_Scripts/generate_shakemap/temp/eq_log.xml -E ies2026duod -d localhost
+    command = f'seiscomp exec scxmldump -AMp -o {xml_path} -E {event_id} -d {server_ip}'
     try:
         subprocess.run(command, check=True, shell=True )
         logging.debug(f'<xml_dump - xml წარმატებით დაგენერირდა>')
@@ -56,15 +60,47 @@ def xml_dump(xml_path, event_id, server_ip):
         sys.exit(1)
 
 
+def parse_downloaded_xml(xml_path):
+    with open(xml_path, "r", encoding="utf-8") as xml_file:
+        xml_file_content = re.sub(' xmlns="[^"]+"', '', xml_file.read(), count=1)
+
+    # String დან xml-ის "გაპარსვა"
+    root = ET.fromstring(xml_file_content)
+
+    # xml - ში origin ტეგის წაკითხვა
+    event_parameters_element = root.find('EventParameters')
+    if event_parameters_element is None and root.tag == 'EventParameters':
+        event_parameters_element = root
+    if event_parameters_element is None:
+        raise ValueError("XML-ში EventParameters ტეგი ვერ მოიძებნა")
+
+    origin_element = event_parameters_element.find('origin')
+    if origin_element is None:
+        raise ValueError("XML-ში origin ტეგი ვერ მოიძებნა")
+
+    parsed_origin = {
+        "publicID": origin_element.attrib.get("publicID"),
+        "time": origin_element.findtext("time/value"),
+        "latitude": origin_element.findtext("latitude/value"),
+        "longitude": origin_element.findtext("longitude/value"),
+        "depth_km": origin_element.findtext("depth/value"),
+    }
+    return parsed_origin
+
+
 if __name__ == '__main__':
     # 1) XML ფაილის დაგენერირება სეისკომპიდან scxmldump-ის გამოყენებით .
-    xml_dump(XML_PATH, EVENT_ID, SERVER_IP)
-    file = open(XML_PATH, "r")
+    event_id = get_event_id_from_argv()
+    if event_id:
+        xml_dump(XML_PATH, event_id, SERVER_IP)
 
-    xml_file_content = re.sub(' xmlns="[^"]+"', '', file.read(), count=1)
+    if not os.path.exists(XML_PATH):
+        logging.critical(f'XML ფაილი ვერ მოიძებნა: {XML_PATH}')
+        sys.exit(1)
 
-    #String დან xml-ის "გაპარსვა"
-    root = ET.fromstring(xml_file_content)
-    #xml - ში origin ტეგის წაკითხვა
-    eventParameters_element =  root.find('EventParameters')
-    origin_element = eventParameters_element.find('origin')
+    try:
+        parsed_origin = parse_downloaded_xml(XML_PATH)
+        print(parsed_origin)
+    except Exception as exc:
+        logging.critical(f'XML parse შეცდომა: {exc}')
+        sys.exit(1)

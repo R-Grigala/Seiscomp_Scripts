@@ -4,7 +4,6 @@ import sys
 import re
 import xml.etree.ElementTree as ET
 import subprocess
-import time
 
 import logging
 from logging.handlers import RotatingFileHandler
